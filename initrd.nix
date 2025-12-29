@@ -83,7 +83,7 @@
       cd /
     '';
 
-    "/root/.terminfo".source = ./.terminfo; # macos default terminal is xterm-256color
+    "/etc/terminfo".source = "${pkgs.ncurses}/share/terminfo";
   };
 
   boot.initrd.systemd.storePaths = [
