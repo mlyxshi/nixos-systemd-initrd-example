@@ -1,0 +1,109 @@
+name: "Install x86_64 BIOS Grub"
+on:
+  workflow_dispatch:
+    inputs:
+      ip:
+        description: 'Ip or Domain'
+        type: string
+        required: true
+      flakeAttr:
+        description: 'OS Config Hostname'
+        type: string
+
+env:
+  SSH: ssh -o StrictHostKeyChecking=no
+  HOST: root@${{ inputs.ip }}
+
+jobs:
+
+  Grub:
+    runs-on: ubuntu-latest
+    steps:
+    - run: |
+        mkdir -m 0755  ~/.ssh
+        echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
+        chmod 600 ~/.ssh/id_ed25519
+
+    - uses: actions/checkout@master
+    - uses: DeterminateSystems/nix-installer-action@main
+
+    - run: |
+        kernelOutPath=$(nix build --no-link --print-out-paths .#nixosConfigurations.kexec-x86_64.config.system.build.kernel)
+        initrdOutPath=$(nix build --no-link --print-out-paths .#nixosConfigurations.kexec-x86_64.config.system.build.initialRamdisk)
+        echo "kernelOutPath=$kernelOutPath" >> "$GITHUB_ENV"
+        echo "initrdOutPath=$initrdOutPath" >> "$GITHUB_ENV"
+
+              
+    - run: |
+        until $SSH -o ConnectTimeout=10 $HOST
+        do
+          echo "Server Not Reachable, Waiting..."
+          sleep 5
+        done
+
+    - run: scp -o StrictHostKeyChecking=no $initrdOutPath/initrd  $kernelOutPath/bzImage $HOST:/root/
+
+    - run: |
+        $SSH $HOST "cat > /boot/grub/custom.cfg" <<EOF
+        menuentry "NixOS" --id NixOS {
+          insmod ext2
+          search -f /etc/hostname --set root
+          linux /root/bzImage systemd.journald.forward_to_console root=fstab
+          initrd /root/initrd
+        }
+        set default="NixOS"
+        EOF
+
+    - name: Reboot
+      continue-on-error: true 
+      run: $SSH $HOST reboot -f
+
+  install:
+    if: ${{ inputs.flakeAttr }}
+    runs-on: ubuntu-latest
+    steps:
+    - run: |
+        mkdir -m 0755  ~/.ssh
+        echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
+        chmod 600 ~/.ssh/id_ed25519
+
+    - uses: actions/checkout@master
+    - uses: DeterminateSystems/nix-installer-action@main
+
+    - run: |
+        outPath=$(nix build --no-link --print-out-paths .#nixosConfigurations.${{ inputs.flakeAttr }}.config.system.build.toplevel)
+        echo "outPath=$outPath" >> "$GITHUB_ENV"
+
+    - run: |
+        until $SSH -o ConnectTimeout=10 $HOST ls /etc/initrd-release
+        do
+          echo "Initrd Environment Not Reachable, Waiting..."
+          sleep 5
+        done
+
+    - run: |
+        DEVICE=$(nix eval --raw .#nixosConfigurations.${{ inputs.flakeAttr }}.config.boot.loader.limine.biosDevice)
+        echo "DEVICE=$DEVICE" >> "$GITHUB_ENV"
+    
+    # BIOS + GPT    https://linux.die.net/man/8/sgdisk
+    - run: $SSH $HOST sgdisk --zap-all $DEVICE
+    - run: $SSH $HOST sgdisk --new=0:0:+1M --typecode=0:ef02 $DEVICE
+    - run: $SSH $HOST sgdisk --new=0:0:+200M --typecode=0:8300 $DEVICE
+    - run: $SSH $HOST sgdisk --new=0:0:0 --typecode=0:8304 $DEVICE
+
+    - run: $SSH $HOST mkdir -p /mnt
+    - run: $SSH $HOST mkfs.fat -F 32 ${DEVICE}2
+    - run: $SSH $HOST mkfs.ext4 -F ${DEVICE}3
+    - run: $SSH $HOST mount ${DEVICE}3 /mnt
+    - run: $SSH $HOST mount --mkdir ${DEVICE}2 /mnt/boot
+
+    
+    # --substitute-on-destination will consume lots of cpu and memory and kill the nix copy job
+    # Do not use --substitute-on-destination when memory is 512MB
+    - run: NIX_SSHOPTS='-o StrictHostKeyChecking=no' nix copy --to ssh://$HOST?remote-store=local?root=/mnt $outPath
+ 
+    - run: $SSH $HOST nix-env --store /mnt -p /mnt/nix/var/nix/profiles/system --set $outPath
+    - run: $SSH $HOST mkdir /mnt/{etc,tmp}
+    - run: $SSH $HOST touch /mnt/etc/NIXOS
+    - run: $SSH $HOST NIXOS_INSTALL_BOOTLOADER=1 nixos-enter --root /mnt -- /run/current-system/bin/switch-to-configuration boot
+    - run: $SSH $HOST reboot
