@@ -1,0 +1,9 @@
+[Match]
+Name=en*
+
+[Network]
+Address=154.17.19.228/32
+
+[Route]
+Gateway=193.41.250.250
+GatewayOnLink=yes

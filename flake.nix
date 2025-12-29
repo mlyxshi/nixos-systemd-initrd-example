@@ -21,7 +21,7 @@
           ];
         };
 
-        host-example = nixpkgs.lib.nixosSystem {
+        host-example-vda = nixpkgs.lib.nixosSystem {
           modules = [
             ./host.nix
           ];
