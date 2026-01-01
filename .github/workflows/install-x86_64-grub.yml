@@ -85,11 +85,13 @@ jobs:
         DEVICE=$(nix eval --raw .#nixosConfigurations.${{ inputs.flakeAttr }}.config.boot.loader.limine.biosDevice)
         echo "DEVICE=$DEVICE" >> "$GITHUB_ENV"
     
-    # BIOS + GPT    https://linux.die.net/man/8/sgdisk
+    # BIOS + GPT
     - run: $SSH $HOST sgdisk --zap-all $DEVICE
-    - run: $SSH $HOST sgdisk --new=0:0:+1M --typecode=0:ef02 $DEVICE
-    - run: $SSH $HOST sgdisk --new=0:0:+200M --typecode=0:8300 $DEVICE
-    - run: $SSH $HOST sgdisk --new=0:0:0 --typecode=0:8304 $DEVICE
+    - run: $SSH $HOST sgdisk -n 0:0:+1M -t 0:ef02 $DEVICE
+    - run: $SSH $HOST sgdisk -n 0:0:+200M $DEVICE
+    - run: $SSH $HOST sgdisk -n 0:0:0  $DEVICE
+    # limine require raw partition
+    - run: $SSH $HOST dd if=/dev/zero of=${DEVICE}1 bs=1M count=1
 
     - run: $SSH $HOST mkdir -p /mnt
     - run: $SSH $HOST mkfs.fat -F 32 ${DEVICE}2
